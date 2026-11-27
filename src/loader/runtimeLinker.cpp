@@ -638,6 +638,23 @@ static std::string DescribeGuestAddr(uint64_t vaddr) {
 	                   vaddr - p->base_vaddr);
 }
 
+// Dumps guest code around a return address so the calling code can be disassembled offline.
+static void DumpCodeAroundReturn(const char* label, uint64_t ret) {
+	constexpr uint64_t before = 320;
+	constexpr uint64_t after  = 64;
+	if (DescribeGuestAddr(ret).empty() || !IsReadableRange(ret - before, before + after)) {
+		return;
+	}
+	const auto* code = reinterpret_cast<const uint8_t*>(ret - before);
+	std::printf("code around %s %s (from ret-0x%x, ret at byte %u):", label,
+	            DescribeGuestAddr(ret).c_str(), static_cast<unsigned>(before),
+	            static_cast<unsigned>(before));
+	for (uint64_t i = 0; i < before + after; i++) {
+		std::printf("%s%02x", (i % 32 == 0) ? "\n " : " ", code[i]);
+	}
+	std::printf("\n");
+}
+
 bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_info) {
 	const auto* info = &exception_info;
 
@@ -758,6 +775,14 @@ bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_
 				}
 				frame = f[0];
 			}
+		}
+		if (stack_slots > 0) {
+			DumpCodeAroundReturn("caller",
+			                     *reinterpret_cast<const uint64_t*>(info->rsp));
+		}
+		if (IsReadableRange(info->rbp, 2 * sizeof(uint64_t))) {
+			DumpCodeAroundReturn("frame#0",
+			                     reinterpret_cast<const uint64_t*>(info->rbp)[1]);
 		}
 		if (stack_slots > 0) {
 			const auto* stack = reinterpret_cast<const uint64_t*>(info->rsp);
