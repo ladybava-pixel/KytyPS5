@@ -384,16 +384,18 @@ const ShaderModule* PipelineCache::GetProgram(const ShaderParams& params, InputI
 		auto& program = entry->second;
 		if (!ShaderRecompiler::IR::MaterializeResources(
 		        program.resource_plan, runtime, program.resources, program.specialization)) {
-			// Opt-in (set KYTY_SKIP_BAD_DISPATCH=1): skip a compute shader whose resources the
-			// host cannot express (for example atomics on an 8-bit image) instead of aborting.
+			// Opt-in (set KYTY_SKIP_BAD_DISPATCH=1): skip a shader whose resources the host
+			// cannot express (for example atomics on an 8-bit image) instead of aborting.
 			// Its output is missing, so some effect may render wrong, but the game keeps running.
 			static const bool skip_bad_dispatch = [] {
 				const char* value = std::getenv("KYTY_SKIP_BAD_DISPATCH");
 				return value != nullptr && value[0] == '1';
 			}();
-			if (skip_bad_dispatch && options.stage == ShaderType::Compute) {
-				std::printf("Shader warning: skipping compute shader 0x%016llx; its resources are "
+			if (skip_bad_dispatch) {
+				// Compute: the dispatch is dropped. Graphics: GetGraphicsPrograms drops the draw.
+				std::printf("Shader warning: skipping %s shader 0x%016llx; its resources are "
 				            "not supported (see the message above)\n",
+				            ShaderRecompiler::StageName(options.stage),
 				            static_cast<unsigned long long>(params.hash));
 				std::fflush(stdout);
 				program.skip_dispatch = true;
@@ -813,7 +815,14 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 	auto push_data = ShaderRecompiler::IR::PushData::GraphicsWindow(
 	    mesh_active, object_primitive_id, last_stage.user_clip_planes);
 	if (pixel_active) {
-		const auto& pixel_module = *GetProgram(pixel_params, pixel_info, push_data);
+		const auto* pixel_program = GetProgram(pixel_params, pixel_info, push_data);
+		if (pixel_program == nullptr) {
+			// Skipped pixel shader (KYTY_SKIP_BAD_DISPATCH): PrepareDrawRenderState drops a
+			// draw whose first vertex stage has no module.
+			vertex_info[0].stage.module = nullptr;
+			return;
+		}
+		const auto& pixel_module = *pixel_program;
 		for (const auto& output: pixel_module.info.info.outputs) {
 			if (output.kind == ShaderRecompiler::IR::StageOutputKind::Mrt ||
 			    output.kind == ShaderRecompiler::IR::StageOutputKind::ObjectPrimitiveId) {
@@ -823,7 +832,10 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 		state.mrt_mask &= color_output_mask;
 	}
 	for (uint32_t i = 0; i < (tess_active ? 3u : 1u); i++) {
-		GetProgram(vertex_params[i], vertex_info[i], push_data);
+		if (GetProgram(vertex_params[i], vertex_info[i], push_data) == nullptr) {
+			vertex_info[0].stage.module = nullptr;
+			return;
+		}
 	}
 }
 
