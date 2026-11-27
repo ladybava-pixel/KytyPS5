@@ -622,6 +622,22 @@ static bool IsReadableRange(uint64_t addr, uint64_t size) {
 	return true;
 }
 
+// Describes a guest address as "module+offset" for the fatal report. Best effort, no locks.
+static std::string DescribeGuestAddr(uint64_t vaddr) {
+	for (const auto& record: g_stubbed_imports) {
+		if (vaddr >= record.thunk_vaddr && vaddr < record.thunk_vaddr + 34) {
+			return "unresolved import stub: " + record.name;
+		}
+	}
+	auto* p = Common::Singleton<RuntimeLinker>::Instance()->FindProgramByAddrNoLock(vaddr);
+	if (p == nullptr) {
+		return {};
+	}
+	return fmt::format("{}+0x{:x}",
+	                   Common::FilenameWithoutDirectory(Common::PathToGenericString(p->file_name)),
+	                   vaddr - p->base_vaddr);
+}
+
 bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_info) {
 	const auto* info = &exception_info;
 
@@ -685,6 +701,36 @@ bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_
 				std::printf("%s%02x", (i % 16 == 0) ? "\n " : " ", code[i]);
 			}
 			std::printf("\n");
+		}
+		{
+			const auto pc_desc = DescribeGuestAddr(info->exception_address);
+			std::printf("pc location: %s\n", pc_desc.empty() ? "??? (not in a loaded module)"
+			                                                   : pc_desc.c_str());
+			// rax often holds the call target for `call rax`; report it as well.
+			if (info->rax != info->exception_address) {
+				const auto rax_desc = DescribeGuestAddr(info->rax);
+				if (!rax_desc.empty()) {
+					std::printf("rax location: %s\n", rax_desc.c_str());
+				}
+			}
+		}
+		if (IsReadableRange(info->rsp, 64 * sizeof(uint64_t))) {
+			// Any stack slot pointing into a loaded module is a likely return address: this
+			// tells which code called the faulting function.
+			const auto* slots = reinterpret_cast<const uint64_t*>(info->rsp);
+			std::printf("possible callers (stack slots pointing into modules):\n");
+			int found = 0;
+			for (int i = 0; i < 64 && found < 16; i++) {
+				const auto desc = DescribeGuestAddr(slots[i]);
+				if (!desc.empty()) {
+					std::printf("  [rsp+0x%03x] %016" PRIx64 "  %s\n", i * 8, slots[i],
+					            desc.c_str());
+					found++;
+				}
+			}
+			if (found == 0) {
+				std::printf("  (none)\n");
+			}
 		}
 		if (IsReadableRange(info->rsp, 32 * sizeof(uint64_t))) {
 			const auto* stack = reinterpret_cast<const uint64_t*>(info->rsp);
@@ -1470,7 +1516,10 @@ Program* RuntimeLinker::FindProgramByFileName(const std::filesystem::path& elf_n
 
 Program* RuntimeLinker::FindProgramByAddr(uint64_t vaddr) {
 	Common::LockGuard lock(m_mutex);
+	return FindProgramByAddrNoLock(vaddr);
+}
 
+Program* RuntimeLinker::FindProgramByAddrNoLock(uint64_t vaddr) {
 	for (auto* p: m_programs) {
 		const auto* ehdr = p->elf->GetEhdr();
 		const auto* phdr = p->elf->GetPhdr();

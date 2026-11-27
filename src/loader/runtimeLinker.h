@@ -153,6 +153,8 @@ public:
 
 	static uint64_t ReadFromElf(Program* program, uint64_t vaddr);
 	Program*        FindProgramByAddr(uint64_t vaddr);
+	// Lock-free variant for the fatal exception path (the faulting thread may hold m_mutex).
+	Program*        FindProgramByAddrNoLock(uint64_t vaddr);
 	Program*        FindProgramById(int32_t id);
 	Program*        FindProgramByFileName(const std::filesystem::path& elf_name);
 	// The ids of the loaded programs in load order.
