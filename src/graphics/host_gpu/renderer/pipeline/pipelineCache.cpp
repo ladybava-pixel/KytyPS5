@@ -384,12 +384,12 @@ const ShaderModule* PipelineCache::GetProgram(const ShaderParams& params, InputI
 		auto& program = entry->second;
 		if (!ShaderRecompiler::IR::MaterializeResources(
 		        program.resource_plan, runtime, program.resources, program.specialization)) {
-			// Opt-in (set KYTY_SKIP_BAD_DISPATCH=1): skip a shader whose resources the host
-			// cannot express (for example atomics on an 8-bit image) instead of aborting.
+			// On by default (set KYTY_SKIP_BAD_DISPATCH=0 to abort instead): skip a shader whose
+			// resources the host cannot express (for example atomics on an 8-bit image).
 			// Its output is missing, so some effect may render wrong, but the game keeps running.
 			static const bool skip_bad_dispatch = [] {
 				const char* value = std::getenv("KYTY_SKIP_BAD_DISPATCH");
-				return value != nullptr && value[0] == '1';
+				return value == nullptr || value[0] != '0';
 			}();
 			if (skip_bad_dispatch) {
 				// Compute: the dispatch is dropped. Graphics: GetGraphicsPrograms drops the draw.
