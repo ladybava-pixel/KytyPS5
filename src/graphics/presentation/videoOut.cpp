@@ -24,6 +24,7 @@
 #include "libs/libs.h"
 #include "loader/systemContent.h"
 
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1716,8 +1717,17 @@ KYTY_SYSV_ABI int VideoOutGetOutputStatus(int handle, VideoOutOutputStatus* stat
 	Loader::SystemContentParamSfoGetInt("ATTRIBUTE3", &attribute3);
 	ctx->mutex.Lock();
 	// Primary output reports 4K unless param.json Video-out Info enables resolution detection.
+	// Fork change: report a 1080p display by default so games size their render targets for
+	// 1080p and need less video memory. Set KYTY_REPORT_4K=1 for the original behavior.
+	static const bool report_4k = [] {
+		const char* value = std::getenv("KYTY_REPORT_4K");
+		return value != nullptr && value[0] == '1';
+	}();
 	status->resolution =
-	    ((attribute3 & 4) != 0 && driver.width < 3840 && driver.height < 2160 ? 1u : 2u);
+	    (!report_4k ||
+	             ((attribute3 & 4) != 0 && driver.width < 3840 && driver.height < 2160)
+	         ? 1u
+	         : 2u);
 	status->dynamicRange = (attribute & 0x20000000) != 0 && driver.IsHdrSupported() ? 2u : 1u;
 	status->refreshRate =
 	    (ctx->output_mode == VIDEO_OUT_OUTPUT_MODE_119_88HZ || Config::GetVblankFrequency() >= 119
