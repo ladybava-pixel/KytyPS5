@@ -9612,6 +9612,7 @@ void TestMalformedMemoryKindsRejected() {
 } // namespace
 
 int main() {
+  Libs::Graphics::ShaderRecompiler::IR::SetUntrackableSamplerFallback(false);
   try {
     const auto Run = [](const char *name, auto test) {
       try {
