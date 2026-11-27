@@ -4246,7 +4246,13 @@ private:
 			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
 				return false;
 			}
-			if (expected == ValueOpcode::GetSamplerResource && width == 4u) {
+			// Opt-in only (set KYTY_SAMPLER_FALLBACK=1): by default an untrackable sampler
+			// stays a hard error, which the resource_tracking tests rely on.
+			static const bool sampler_fallback = [] {
+				const char* value = std::getenv("KYTY_SAMPLER_FALLBACK");
+				return value != nullptr && value[0] == '1';
+			}();
+			if (sampler_fallback && expected == ValueOpcode::GetSamplerResource && width == 4u) {
 				// The sampler descriptor comes from a source the tracker cannot follow.
 				// Instead of aborting the whole emulator, bind a fixed sampler (bilinear,
 				// wrap, all mips). Textures may look slightly wrong but the game keeps running.
