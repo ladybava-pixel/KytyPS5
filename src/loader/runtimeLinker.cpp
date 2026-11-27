@@ -714,13 +714,19 @@ bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_
 				}
 			}
 		}
-		if (IsReadableRange(info->rsp, 64 * sizeof(uint64_t))) {
+		// A guest thread's stack can end just above rsp (the fault may happen a few frames
+		// below the thread entry), so read only as many slots as are actually mapped.
+		int stack_slots = 64;
+		while (stack_slots > 0 && !IsReadableRange(info->rsp, stack_slots * sizeof(uint64_t))) {
+			stack_slots--;
+		}
+		if (stack_slots > 0) {
 			// Any stack slot pointing into a loaded module is a likely return address: this
 			// tells which code called the faulting function.
 			const auto* slots = reinterpret_cast<const uint64_t*>(info->rsp);
 			std::printf("possible callers (stack slots pointing into modules):\n");
 			int found = 0;
-			for (int i = 0; i < 64 && found < 16; i++) {
+			for (int i = 0; i < stack_slots && found < 16; i++) {
 				const auto desc = DescribeGuestAddr(slots[i]);
 				if (!desc.empty()) {
 					std::printf("  [rsp+0x%03x] %016" PRIx64 "  %s\n", i * 8, slots[i],
@@ -732,10 +738,31 @@ bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_
 				std::printf("  (none)\n");
 			}
 		}
-		if (IsReadableRange(info->rsp, 32 * sizeof(uint64_t))) {
+		{
+			// Follow the rbp frame chain: each frame stores [saved rbp, return address].
+			std::printf("frame chain (rbp):\n");
+			uint64_t frame = info->rbp;
+			for (int depth = 0; depth < 16 && frame != 0 && (frame & 7u) == 0 &&
+			                    IsReadableRange(frame, 2 * sizeof(uint64_t));
+			     depth++) {
+				const auto* f   = reinterpret_cast<const uint64_t*>(frame);
+				const auto  ret = f[1];
+				if (ret == 0) {
+					break;
+				}
+				const auto desc = DescribeGuestAddr(ret);
+				std::printf("  #%d ret=%016" PRIx64 "  %s\n", depth, ret,
+				            desc.empty() ? "???" : desc.c_str());
+				if (f[0] <= frame) {
+					break;
+				}
+				frame = f[0];
+			}
+		}
+		if (stack_slots > 0) {
 			const auto* stack = reinterpret_cast<const uint64_t*>(info->rsp);
-			std::printf("stack:");
-			for (int i = 0; i < 32; i++) {
+			std::printf("stack (%d slots readable):", stack_slots);
+			for (int i = 0; i < std::min(stack_slots, 32); i++) {
 				std::printf("%s %016" PRIx64, (i % 4 == 0) ? "\n " : "", stack[i]);
 			}
 			std::printf("\n");
