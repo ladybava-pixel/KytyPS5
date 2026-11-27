@@ -4246,6 +4246,26 @@ private:
 			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
 				return false;
 			}
+			if (expected == ValueOpcode::GetSamplerResource && width == 4u) {
+				// The sampler descriptor comes from a source the tracker cannot follow.
+				// Instead of aborting the whole emulator, bind a fixed sampler (bilinear,
+				// wrap, all mips). Textures may look slightly wrong but the game keeps running.
+				std::printf("Shader warning: hash=0x%016llx stage=%s pc=0x%08x sampler dword %u "
+				            "is not trackable; using a default sampler\n",
+				            static_cast<unsigned long long>(m_program.shader_hash),
+				            std::string(StageName(m_program.stage)).c_str(), pc, bad_dword);
+				std::fflush(stdout);
+				DescriptorSource fallback;
+				fallback.dword_count = 4u;
+				fallback.dwords[0]   = Value(0u);          // wrap on all axes
+				fallback.dwords[1]   = Value(0x00FFF000u); // min LOD 0, max LOD 15.99
+				fallback.dwords[2]   = Value(0x01500000u); // bilinear mag/min filtering
+				fallback.dwords[3]   = Value(0u);          // border color: transparent black
+				if (ValidateSource(fallback, bad_dword)) {
+					source = InternSource(fallback);
+					return true;
+				}
+			}
 			Fail(pc, fmt::format("{} dword {} is not a valid runtime value",
 			                     ValueOpcodeName(expected), bad_dword));
 		}
