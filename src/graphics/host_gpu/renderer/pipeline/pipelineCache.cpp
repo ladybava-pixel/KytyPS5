@@ -22,6 +22,7 @@
 #include "kernel/memory.h"
 #include "loader/systemContent.h"
 
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -381,8 +382,26 @@ const ShaderModule* PipelineCache::GetProgram(const ShaderParams& params, InputI
 		    .resource_plan = ShaderRecompiler::IR::ExtractResourcePlan(translated.program),
 		}).first;
 		auto& program = entry->second;
-		EXIT_IF(!ShaderRecompiler::IR::MaterializeResources(
-		    program.resource_plan, runtime, program.resources, program.specialization));
+		if (!ShaderRecompiler::IR::MaterializeResources(
+		        program.resource_plan, runtime, program.resources, program.specialization)) {
+			// Opt-in (set KYTY_SKIP_BAD_DISPATCH=1): skip a compute shader whose resources the
+			// host cannot express (for example atomics on an 8-bit image) instead of aborting.
+			// Its output is missing, so some effect may render wrong, but the game keeps running.
+			static const bool skip_bad_dispatch = [] {
+				const char* value = std::getenv("KYTY_SKIP_BAD_DISPATCH");
+				return value != nullptr && value[0] == '1';
+			}();
+			if (skip_bad_dispatch && options.stage == ShaderType::Compute) {
+				std::printf("Shader warning: skipping compute shader 0x%016llx; its resources are "
+				            "not supported (see the message above)\n",
+				            static_cast<unsigned long long>(params.hash));
+				std::fflush(stdout);
+				program.skip_dispatch = true;
+				return nullptr;
+			}
+			EXIT("shader resource materialization failed for shader 0x%016llx",
+			     static_cast<unsigned long long>(params.hash));
+		}
 	} else if (source_changed) {
 		entry->second.resource_plan = ShaderRecompiler::IR::ExtractResourcePlan(translated.program);
 		if (const auto* module = entry->second.FindModule<true>(runtime, push_data)) {
