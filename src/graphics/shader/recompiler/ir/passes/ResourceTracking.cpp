@@ -6,6 +6,7 @@
 #include "graphics/shader/recompiler/ir/passes/SrtWalker.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -23,6 +24,17 @@
 #include <xxhash.h>
 
 namespace Libs::Graphics::ShaderRecompiler::IR {
+
+// See SetUntrackableSamplerFallback. On by default; KYTY_SAMPLER_FALLBACK=0 turns it off.
+static std::atomic_bool g_untrackable_sampler_fallback = [] {
+	const char* value = std::getenv("KYTY_SAMPLER_FALLBACK");
+	return value == nullptr || value[0] != '0';
+}();
+
+void SetUntrackableSamplerFallback(bool enabled) {
+	g_untrackable_sampler_fallback.store(enabled, std::memory_order_relaxed);
+}
+
 namespace {
 
 constexpr uint32_t SamplerBorderClampMask    = (1u << 2u) | (1u << 5u) | (1u << 8u);
@@ -4246,12 +4258,10 @@ private:
 			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
 				return false;
 			}
-			// Opt-in only (set KYTY_SAMPLER_FALLBACK=1): by default an untrackable sampler
-			// stays a hard error, which the resource_tracking tests rely on.
-			static const bool sampler_fallback = [] {
-				const char* value = std::getenv("KYTY_SAMPLER_FALLBACK");
-				return value != nullptr && value[0] == '1';
-			}();
+			// Tests disable this with SetUntrackableSamplerFallback(false) so an untrackable
+			// sampler stays a hard error there.
+			const bool sampler_fallback =
+			    g_untrackable_sampler_fallback.load(std::memory_order_relaxed);
 			if (sampler_fallback && expected == ValueOpcode::GetSamplerResource && width == 4u) {
 				// The sampler descriptor comes from a source the tracker cannot follow.
 				// Instead of aborting the whole emulator, bind a fixed sampler (bilinear,
